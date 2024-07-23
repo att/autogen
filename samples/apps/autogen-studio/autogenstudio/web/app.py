@@ -5,14 +5,13 @@ import threading
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Union
+import json
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from openai import OpenAIError
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
 
 from ..chatmanager import AutoGenChatManager, WebSocketConnectionManager
 from ..database import workflow_from_id
@@ -21,6 +20,8 @@ from ..datamodel import Agent, Message, Model, Response, Session, Skill, Workflo
 from ..profiler import Profiler
 from ..utils import check_and_cast_datetime_fields, init_app_folders, md5_hash, test_model
 from ..version import VERSION
+from ..utils.secretmanager import *
+from distutils.util import strtobool
 
 profiler = Profiler()
 managers = {"chat": None}  # manage calls to autogen
@@ -66,39 +67,12 @@ ui_folder_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 database_engine_uri = folders["database_engine_uri"]
 dbmanager = DBManager(engine_uri=database_engine_uri)
 
-async def retrieve_all_secrets(interval_time: int):
-
-    def retrieve_secrets_from_Azure():
-
-        KVUri = os.environ['AZURE_KEYVAULT_URL']
-
-        credential = DefaultAzureCredential()
-        client = SecretClient(vault_url=KVUri, credential=credential)
-
-        secret_names = [secret.name for secret in client.list_properties_of_secrets()]
-        secrets = [client.get_secret(secret_name).value for secret_name in secret_names]
-        
-        return secrets
-
-    def retrieve_secrets_from_file():
-
-        secrets=[]
-        with open(os.environ['BLACKLIST_PATH'], "r") as f:
-            secrets = f.read().split()
-        
-        return secrets
-        
-    def retrieve_secrets_from_skills():
-        secrets = []
-        for skill in dbmanager.get(model_class=Skill).data:
-            for secret in skill.secrets:
-                if secret['value'] != (None or ''):
-                    secrets.append(secret['value'])
-        
-        return secrets
-    
+async def get_all_secrets(interval_time: int):
     while True:
-        os.environ['ALL_SECRETS'] = "|".join(map(str, retrieve_secrets_from_Azure()+retrieve_secrets_from_file()+retrieve_secrets_from_skills()))
+        os.environ['ALL_SECRETS'] = "|".join(map(str, (get_secrets_from_cloud(secret_providers=os.environ['CLOUD_SECRET_PROVIDERS'].split(',')) if os.environ['CLOUD_SECRET_PROVIDERS'] else "") + 
+                                                      (get_secrets_from_file(os.environ['BLACKLIST_PATH']) if os.environ['BLACKLIST_PATH'] else "") +
+                                                      (get_secrets_from_skills(dbmanager))))
+
         print("Secrets updated")
         await asyncio.sleep(interval_time)
 
@@ -107,7 +81,9 @@ async def lifespan(app: FastAPI):
     print("***** App started *****")
     managers["chat"] = AutoGenChatManager(message_queue=message_queue)
     dbmanager.create_db_and_tables()
-    asyncio.create_task(retrieve_all_secrets(int(os.environ['SECRET_FETCH_TIMEOUT'])))
+
+    if strtobool(os.environ['ENABLE_SECRET_REDACTION']):
+        asyncio.create_task(get_all_secrets(int(os.environ['SECRET_FETCH_TIMEOUT'])))
 
     yield
     # Close all active connections
