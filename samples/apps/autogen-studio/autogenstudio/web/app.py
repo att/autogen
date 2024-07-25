@@ -56,7 +56,7 @@ def message_handler():
 message_handler_thread = threading.Thread(target=message_handler, daemon=True)
 message_handler_thread.start()
 
-
+"test test"
 app_file_path = os.path.dirname(os.path.abspath(__file__))
 folders = init_app_folders(app_file_path)
 ui_folder_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
